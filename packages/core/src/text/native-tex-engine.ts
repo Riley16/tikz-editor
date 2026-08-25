@@ -137,25 +137,41 @@ export function createNativeTexNodeTextEngine(opts: NativeTexEngineOptions): Nod
         });
         if (!compileResult.ok) {
           surfaceFailure(compileResult);
+          // Cache the failure as a visible error render so the user sees a
+          // clear "compile failed" indicator in the canvas instead of the
+          // node silently falling back to plain-text rendering of the raw
+          // source. Recovery: any edit to the fragment or preamble changes
+          // the cache key and triggers a fresh compile attempt.
+          const errorRender = buildErrorRender(cacheKey, compileResult);
+          setCappedMapValue(renderCache, cacheKey, errorRender, RENDER_CACHE_LIMIT);
+          finalizedPendingKeys.add(cacheKey);
           return;
         }
         const parsed = parseSvgPayload(compileResult.svg, cacheKey);
         if (!parsed) {
-          surfaceFailure({
-            ok: false,
-            kind: "runtime-error",
+          const syntheticFailure = {
+            ok: false as const,
+            kind: "runtime-error" as const,
             message: "Native TeX compile returned SVG without a parseable viewBox."
-          });
+          };
+          surfaceFailure(syntheticFailure);
+          const errorRender = buildErrorRender(cacheKey, syntheticFailure);
+          setCappedMapValue(renderCache, cacheKey, errorRender, RENDER_CACHE_LIMIT);
+          finalizedPendingKeys.add(cacheKey);
           return;
         }
         setCappedMapValue(renderCache, cacheKey, parsed, RENDER_CACHE_LIMIT);
         finalizedPendingKeys.add(cacheKey);
       } catch (error) {
-        surfaceFailure({
-          ok: false,
-          kind: "runtime-error",
+        const syntheticFailure = {
+          ok: false as const,
+          kind: "runtime-error" as const,
           message: error instanceof Error ? error.message : String(error)
-        });
+        };
+        surfaceFailure(syntheticFailure);
+        const errorRender = buildErrorRender(cacheKey, syntheticFailure);
+        setCappedMapValue(renderCache, cacheKey, errorRender, RENDER_CACHE_LIMIT);
+        finalizedPendingKeys.add(cacheKey);
       } finally {
         inFlightCompiles.delete(cacheKey);
       }
@@ -284,6 +300,39 @@ function computeFontScale(fontSizePt: number): number {
   // MathJax normalizes to 10pt as the natural size; keep the same convention
   // so downstream layout math handles both engines the same way.
   return fontSizePt / 10;
+}
+
+/**
+ * Build a visible-in-canvas error render for a compile failure. Renders as a
+ * small red-bordered box with the error kind + first line of the message,
+ * embedded exactly like a normal compiled fragment (same CachedRender shape).
+ * This is what the user sees in place of a node whose fragment couldn't
+ * compile — a deliberate, honest failure indicator instead of silent
+ * fall-back to raw source text.
+ */
+function buildErrorRender(
+  cacheKey: string,
+  failure: { kind: string; message: string }
+): CachedRender {
+  const firstLine = failure.message.split(/\r?\n/, 1)[0] ?? failure.message;
+  const truncated = firstLine.length > 90 ? `${firstLine.slice(0, 87)}...` : firstLine;
+  const label = `${failure.kind}: ${truncated}`;
+  const escaped = label
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+  const width = Math.max(160, Math.min(480, label.length * 6 + 24));
+  const height = 22;
+  const body = `<rect x="1" y="1" width="${width - 2}" height="${height - 2}" fill="#fff5f5" stroke="#d33" stroke-width="1"/><text x="6" y="15" fill="#d33" font-family="monospace" font-size="10">${escaped}</text>`;
+  return {
+    payload: {
+      cacheKey,
+      viewBox: { x: 0, y: 0, width, height },
+      body
+    },
+    widthPt: width,
+    heightPt: height
+  };
 }
 
 function parseSvgPayload(svg: string, cacheKey: string): CachedRender | null {

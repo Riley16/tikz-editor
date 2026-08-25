@@ -82,6 +82,22 @@ export function FigureNavigator() {
     return () => { window.cancelAnimationFrame(raf); };
   }, [activeDocumentId, figures.length]);
 
+  // Scroll the newly-active thumbnail into view whenever the active figure
+  // changes (arrow navigation, keyboard shortcut, programmatic dispatch).
+  // Without this, clicking the > arrow to advance to a figure that's off-
+  // screen or straddling the strip edge appears to "do nothing" — the
+  // active state moved but the visual selection is invisible.
+  useEffect(() => {
+    if (!activeFigureId) {
+      return;
+    }
+    const raf = window.requestAnimationFrame(() => {
+      const thumb = thumbRefByFigureId.current.get(activeFigureId);
+      thumb?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+    });
+    return () => { window.cancelAnimationFrame(raf); };
+  }, [activeFigureId]);
+
   const priorityFigureIds = useMemo(() => {
     const ids: string[] = [...visibleFigureIds];
     if (activeIndex < 0) {

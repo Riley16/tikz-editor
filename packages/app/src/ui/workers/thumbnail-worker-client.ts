@@ -1,3 +1,4 @@
+import { getSharedTextEngine, hasNativeTexCompilerRegistered } from "../../compute";
 import type {
   ThumbnailRenderFailure,
   ThumbnailRenderRequest,
@@ -35,6 +36,19 @@ function getWorker(): Worker | null {
 }
 
 export async function requestThumbnail(request: ThumbnailRenderRequest): Promise<ThumbnailRenderSuccess | ThumbnailRenderFailure> {
+  // When a native TeX compile function is registered, always use the main-
+  // thread fallback path so the shared engine's cache is reused. The worker
+  // is a separate context that can't invoke Tauri IPC directly — routing
+  // there would silent-fail on any macro / \includegraphics fragment, which
+  // is exactly the "unrendered latex in thumbnails" bug this avoids.
+  //
+  // Native compile is offloaded to Rust anyway (Tauri command spawns
+  // latex+dvisvgm in a subprocess), so the "main-thread render" path is
+  // really just orchestration — the heavy work is off-main.
+  if (hasNativeTexCompilerRegistered()) {
+    return renderThumbnailFallback(request);
+  }
+
   const worker = getWorker();
   if (!worker) {
     return renderThumbnailFallback(request);
@@ -112,6 +126,16 @@ function onWorkerMessage(event: MessageEvent<ThumbnailWorkerResponseMessage>): v
 async function renderThumbnailFallback(request: ThumbnailRenderRequest): Promise<ThumbnailRenderSuccess | ThumbnailRenderFailure> {
   try {
     const { renderTikzToSvgAsync } = await import("tikz-editor/render/index");
+    // Reuse the shared text engine so thumbnails hit the same cache the
+    // canvas render populated, and so native-only fragments (macros,
+    // \includegraphics) render properly here too. When no shared engine is
+    // available (web build, or before the app has finished bootstrapping),
+    // this resolves to null and renderTikzToSvgAsync falls back to its own
+    // default MathJax engine.
+    const sharedEngineMaybe = getSharedTextEngine();
+    const sharedEngine = sharedEngineMaybe instanceof Promise
+      ? await sharedEngineMaybe
+      : sharedEngineMaybe;
     const rendered = await renderTikzToSvgAsync(request.source, {
       parse: {
         recover: request.parseOptions.recover ?? true,
@@ -120,7 +144,8 @@ async function renderThumbnailFallback(request: ThumbnailRenderRequest): Promise
       },
       svg: {
         padding: request.svgOptions?.padding
-      }
+      },
+      textEngine: sharedEngine ?? undefined
     });
     return {
       type: "result",

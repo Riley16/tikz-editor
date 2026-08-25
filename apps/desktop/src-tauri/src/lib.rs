@@ -2002,6 +2002,12 @@ async fn desktop_compile_tex_fragment(
         });
     }
 
+    // `--no-styles` inlines each element's font-family instead of emitting a
+    // CSS class table (text.f0, text.f1, ...). This matters because multiple
+    // fragments embedded in the same canvas SVG would otherwise collide on
+    // those class names — the last-parsed <style> block wins for the whole
+    // page, so glyphs from fragment A get styled with fragment B's font
+    // mapping. Inline styles are per-element and cannot collide.
     let dvisvgm_run = run_shell_command_with_env(
         &app,
         "dvisvgm",
@@ -2010,6 +2016,7 @@ async fn desktop_compile_tex_fragment(
             "--bbox=min",
             "--exact",
             "--font-format=woff2",
+            "--no-styles",
             "-o",
             "output.svg",
             "input.dvi",

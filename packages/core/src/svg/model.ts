@@ -135,7 +135,16 @@ export async function serializeSvgModelAsync(
 }
 
 function serializeSvgModelCompact(model: SvgRenderModel, includeXmlns: boolean): string {
-  const xmlns = includeXmlns ? ` xmlns="http://www.w3.org/2000/svg"` : "";
+  // xmlns:xlink is declared alongside xmlns because native-TeX-rendered
+  // fragments include `<image xlink:href="data:...">` elements from
+  // dvisvgm output. Inline DOM parsing is lenient about unaliased xlink:
+  // attributes, but strict SVG parsing (e.g. when the whole SVG is loaded
+  // via `<img src="data:image/svg+xml,...">` for thumbnail rendering)
+  // treats an undeclared xlink namespace as an error and drops those
+  // elements — showing a broken-image icon for the whole SVG.
+  const xmlns = includeXmlns
+    ? ` xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"`
+    : "";
   const defs = model.defs.length > 0 ? `<defs>${model.defs.join("")}</defs>` : "";
   const body = model.parts.map((part) => part.markup).join("");
   return (

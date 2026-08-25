@@ -92,9 +92,54 @@ Some features have partial support (decorations, graphs, plots). Advanced constr
 3. Use the drawing tools in the toolbar to add and edit elements
 4. Export your diagram when ready
 
+## Run from source (desktop app)
+
+Clone, install, and launch the desktop dev build in a few minutes. The first
+Rust build takes 3–5 min (Tauri compiles ~500 crate dependencies). Subsequent
+launches take seconds — Cargo caches per-crate artifacts and Vite hot-reloads
+frontend changes.
+
+### Prerequisites
+
+- **Node.js 18+** and **npm** — the build uses Node 26 in this fork's CI but any recent LTS works.
+- **Rust toolchain** (for the desktop app) — install via [rustup.rs](https://rustup.rs) if not present.
+- **A TeX distribution** if you want native `\includegraphics` / user-macro rendering:
+  - macOS: [MacTeX](https://tug.org/mactex/)
+  - Linux: `apt install texlive-full` (or your distro's equivalent)
+  - Windows: [MiKTeX](https://miktex.org/)
+- **Ghostscript** — needed for raster image embedding under `\includegraphics`. Homebrew, apt, and MiKTeX all install it; the app auto-detects the shared library. Skip this if you don't need image support.
+
+### Clone + install + run
+
+```bash
+git clone git@github.com:Riley16/tikz-editor.git
+cd tikz-editor
+npm install                # ~2–5 min for the monorepo
+npm run dev:desktop        # first launch: 3–5 min Rust build, then window opens
+```
+
+Later runs:
+```bash
+npm run dev:desktop        # ~5s incremental rebuild + launch
+```
+
+Edit Rust code (`apps/desktop/src-tauri/src/`) → auto-recompiles + relaunches. Edit TypeScript/React (`packages/`, `apps/desktop/src/`) → hot-reloads instantly.
+
+### If a second instance is running
+
+Tauri's single-instance plugin will exit the dev launcher cleanly (no window) if an existing app with the same bundle ID is already open — including a released `.app` in `/Applications`. Quit any running TikZ Editor before `npm run dev:desktop`.
+
+### Web build
+
+```bash
+npm run dev -w @tikz-editor/web
+```
+
+The web build has no local TeX toolchain, so `\includegraphics` and user macros are unsupported there — the app falls back to MathJax for everything.
+
 ## Development
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for build instructions, architecture overview, and contribution guidelines.
+See [DEVELOPMENT.md](DEVELOPMENT.md) for build instructions, architecture overview, contribution guidelines, and the full script catalog (tests, capability matrix, corpus, profiling).
 
 ## License
 

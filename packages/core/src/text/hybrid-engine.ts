@@ -1,18 +1,12 @@
-import type {
-  NodeTextEngine,
-  NodeTextMeasureRequest,
-  NodeTextMetrics,
-  NodeTextRenderPayload,
-  NodeTextValidationIssue
-} from "./types.js";
-import { textRequiresNativeTexEngine } from "./native-tex-detect.js";
+import type { NodeTextEngine } from "./types.js";
 
 export type HybridNodeTextEngineOptions = {
   /**
-   * Set of user-defined macro names (without the leading `\`) — typically
-   * extracted from the parent document's preamble via `collectPreambleMacros`.
-   * Any fragment mentioning one of these will be routed to the native
-   * engine so the threaded-preamble compile expands the macro correctly.
+   * Set of user-defined macro names extracted from the document preamble.
+   * Retained on the type for backward-compatibility with earlier per-fragment
+   * routing; the current implementation always uses the native engine when
+   * one is available, so this field is effectively ignored. Kept optional so
+   * existing callers don't break.
    */
   userMacroNames?: ReadonlySet<string>;
 };
@@ -35,44 +29,23 @@ export type HybridNodeTextEngineOptions = {
 export function createHybridNodeTextEngine(
   mathjax: NodeTextEngine,
   native: NodeTextEngine | null,
-  options?: HybridNodeTextEngineOptions
+  _options?: HybridNodeTextEngineOptions
 ): NodeTextEngine {
   if (native == null) {
     return mathjax;
   }
-  const userMacroNames = options?.userMacroNames;
-
-  return {
-    validate(text: string): NodeTextValidationIssue | null {
-      return textRequiresNativeTexEngine(text, userMacroNames)
-        ? native.validate(text)
-        : mathjax.validate(text);
-    },
-
-    measure(request: NodeTextMeasureRequest): NodeTextMetrics | null {
-      return textRequiresNativeTexEngine(request.text, userMacroNames)
-        ? native.measure(request)
-        : mathjax.measure(request);
-    },
-
-    renderFromCache(cacheKey: string): NodeTextRenderPayload | null {
-      const nativeHit = native.renderFromCache(cacheKey);
-      if (nativeHit != null) {
-        return nativeHit;
-      }
-      return mathjax.renderFromCache(cacheKey);
-    },
-
-    async flushPending(): Promise<readonly string[]> {
-      const mathjaxKeys = mathjax.flushPending ? await mathjax.flushPending() : [];
-      const nativeKeys = native.flushPending ? await native.flushPending() : [];
-      if (mathjaxKeys.length === 0) {
-        return nativeKeys;
-      }
-      if (nativeKeys.length === 0) {
-        return mathjaxKeys;
-      }
-      return [...mathjaxKeys, ...nativeKeys];
-    }
-  };
+  // When a native TeX engine is available, use it for ALL node text — MathJax
+  // is bypassed on this path. Rationale: MathJax silent-fails on any macro or
+  // construct outside its (limited) supported subset, which then falls back
+  // to raw-source plain-text rendering in the canvas — an invisible failure
+  // that's very confusing. The native engine's failure mode is explicit:
+  // compile failures produce a visible error render (see buildErrorRender in
+  // native-tex-engine.ts) so the user always sees either a correct render or
+  // a clear "compile failed" indicator.
+  //
+  // MathJax is retained in the codebase for the web build (which has no local
+  // TeX toolchain, so native is always null there — the `if` above returns
+  // mathjax) and as a defense-in-depth fallback if a caller wires the hybrid
+  // engine without a native side.
+  return native;
 }
