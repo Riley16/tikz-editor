@@ -10,11 +10,16 @@ The core library uses a layered pipeline:
 2. **Semantic Evaluator** (`packages/core/src/semantic`) — Resolves styles, transforms, coordinates, and path semantics into a scene graph
 3. **SVG Backend** (`packages/core/src/svg`) — Emits pure SVG from scene elements
 4. **Render API** (`packages/core/src/render`) — End-to-end source → SVG orchestration
+5. **Text Engines** (`packages/core/src/text`) — Pluggable `NodeTextEngine` implementations that measure + render node text. The repo ships two:
+   - `mathjax-engine.ts` — in-process MathJax; the sole engine used by the web build.
+   - `native-tex-engine.ts` — desktop only. Wraps each fragment in a standalone `.tex` document, calls an injected compile function (`NativeTexCompileFn`), extracts a `viewBox` from the resulting SVG, and caches by hash of (fragment, preamble, working directory, referenced image mtimes). Compile failures cache a synthetic red-bordered error render, so the canvas shows an explicit failure indicator instead of silently falling back to raw source text.
+   - `hybrid-engine.ts` — the routing wrapper: uses the native engine when one is provided, otherwise MathJax.
+   - `native-tex-detect.ts`, `preamble-extract.ts` — support utilities (legacy: routing heuristic; current: preamble extraction + macro-name collection for cache keying).
 
 ## Apps
 
-- **Web app** (`apps/web`) — Vite + React
-- **Desktop app** (`apps/desktop`) — Tauri v2
+- **Web app** (`apps/web`) — Vite + React. Uses MathJax as the sole text engine (no local TeX toolchain in a browser).
+- **Desktop app** (`apps/desktop`) — Tauri v2. Injects a native TeX compile function that shells out to `latex` + `dvisvgm` via `desktop_compile_tex_fragment` (see `apps/desktop/src-tauri/src/lib.rs`), then the hybrid engine routes ALL fragments through it (visible errors on failure). Also hosts the agent screenshot debug feature (`start_agent_screenshot_watcher` + `apps/desktop/src/agent-screenshot.ts`).
 
 ## Scripts
 
