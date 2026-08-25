@@ -2512,6 +2512,137 @@ fn desktop_prepare_update_relaunch(app: AppHandle) -> Result<(), String> {
     write_update_relaunch_marker(&app)
 }
 
+// ── Agent screenshot: file-triggered canvas capture ──────────────────────────
+//
+// Motivation: coding agents (Claude Code, etc.) that drive the app for testing
+// need a way to see what the canvas is rendering, without relying on the
+// user's Screen Recording TCC permission (which is granted per-parent-process
+// and often unavailable when the shell is nested inside VS Code/similar).
+//
+// Strategy: capture happens *inside* the app via the browser's own SVG
+// rasterizer (JS-side `<canvas>.drawImage(<svg>)`), which uses the same
+// rendering pipeline the WebView uses to paint pixels to the screen. No OS
+// screen-capture APIs are invoked, so no TCC prompt ever fires.
+//
+// Trigger mechanism: the app watches a well-known path for the trigger file
+// to be created. When it appears, it emits a Tauri event to the frontend;
+// the frontend captures the canvas, base64-encodes the PNG, and calls
+// desktop_write_agent_screenshot to save it alongside the trigger. The
+// trigger is deleted last so agents polling for the output know when the
+// write completed.
+//
+// Cross-platform: works anywhere a WebView (WKWebView / WebView2 /
+// WebKitGTK) can rasterize an inline SVG via <canvas> — i.e. everywhere.
+const AGENT_SCREENSHOT_TRIGGER_EVENT: &str = "desktop-agent-screenshot-request";
+
+fn agent_screenshot_trigger_path() -> PathBuf {
+    env::temp_dir().join("tikz-editor-agent-screenshot-request")
+}
+
+fn agent_screenshot_output_path() -> PathBuf {
+    env::temp_dir().join("tikz-editor-agent-screenshot.png")
+}
+
+struct AgentScreenshotWatchState {
+    #[allow(dead_code)] // held for its Drop side effect (keeps the watcher alive)
+    watcher: Mutex<Option<RecommendedWatcher>>,
+}
+
+impl Default for AgentScreenshotWatchState {
+    fn default() -> Self {
+        Self {
+            watcher: Mutex::new(None),
+        }
+    }
+}
+
+fn start_agent_screenshot_watcher(app: AppHandle) -> Result<(), String> {
+    let trigger_path = agent_screenshot_trigger_path();
+    let watch_dir = trigger_path
+        .parent()
+        .ok_or_else(|| "agent screenshot trigger path has no parent".to_string())?
+        .to_path_buf();
+    fs::create_dir_all(&watch_dir).map_err(|e| format!("mkdir {}: {e}", watch_dir.display()))?;
+
+    let app_for_callback = app.clone();
+    let trigger_for_callback = trigger_path.clone();
+    let mut watcher = RecommendedWatcher::new(
+        move |event: notify::Result<notify::Event>| {
+            let Ok(event) = event else {
+                return;
+            };
+            let matched = event
+                .paths
+                .iter()
+                .any(|path| path.file_name() == trigger_for_callback.file_name());
+            if !matched {
+                return;
+            }
+            // Fire the event to the frontend on both Create and Modify events;
+            // `touch` on macOS often manifests as Modify if the file already
+            // existed briefly, and Create for a fresh path.
+            let _ = app_for_callback.emit(
+                AGENT_SCREENSHOT_TRIGGER_EVENT,
+                agent_screenshot_output_path().to_string_lossy().to_string(),
+            );
+        },
+        NotifyConfig::default(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    watcher
+        .watch(&watch_dir, RecursiveMode::NonRecursive)
+        .map_err(|e| e.to_string())?;
+
+    let state = app.state::<AgentScreenshotWatchState>();
+    let mut slot = state
+        .watcher
+        .lock()
+        .map_err(|_| "agent screenshot watcher state unavailable".to_string())?;
+    *slot = Some(watcher);
+    Ok(())
+}
+
+#[tauri::command]
+fn desktop_agent_screenshot_paths() -> AgentScreenshotPaths {
+    AgentScreenshotPaths {
+        trigger: agent_screenshot_trigger_path()
+            .to_string_lossy()
+            .into_owned(),
+        output: agent_screenshot_output_path()
+            .to_string_lossy()
+            .into_owned(),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentScreenshotPaths {
+    trigger: String,
+    output: String,
+}
+
+/// Called by the frontend after it has rasterized the canvas SVG into a PNG.
+/// Writes the decoded PNG to disk at the output path, then deletes the
+/// trigger file so the agent knows the write completed.
+#[tauri::command]
+fn desktop_write_agent_screenshot(png_base64: String) -> Result<String, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(png_base64.trim())
+        .map_err(|e| format!("agent screenshot base64 decode failed: {e}"))?;
+    let output = agent_screenshot_output_path();
+    fs::write(&output, &bytes)
+        .map_err(|e| format!("agent screenshot write {}: {e}", output.display()))?;
+    // Delete the trigger AFTER the output is written so an agent polling for
+    // the trigger's absence (a common signal-for-done pattern) knows the
+    // output PNG is safely on disk when the trigger disappears.
+    let trigger = agent_screenshot_trigger_path();
+    if trigger.exists() {
+        let _ = fs::remove_file(&trigger);
+    }
+    Ok(output.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 fn desktop_perform_snap_haptic() -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -2906,6 +3037,8 @@ pub fn run() {
             desktop_take_pending_open_failures,
             desktop_open_external,
             desktop_prepare_update_relaunch,
+            desktop_agent_screenshot_paths,
+            desktop_write_agent_screenshot,
             desktop_perform_snap_haptic,
             desktop_prefers_non_blinking_text_insertion_indicator,
             desktop_read_custom_clipboard_text,
@@ -2972,6 +3105,17 @@ pub fn run() {
             process_associated_open_requests(&app.handle(), &startup_args, startup_cwd.as_deref());
 
             app.manage(AssistantState::new(app.handle().clone()));
+
+            // Agent screenshot watcher — see agent_screenshot_trigger_path().
+            // Debug-only feature (agents driving the app for testing); safe
+            // to always start because the watched path only exists during an
+            // agent-triggered capture, and errors here are non-fatal.
+            app.manage(AgentScreenshotWatchState::default());
+            if let Err(error) = start_agent_screenshot_watcher(app.handle().clone()) {
+                if cfg!(debug_assertions) {
+                    log::warn!("agent screenshot watcher init failed: {error}");
+                }
+            }
 
             #[cfg(target_os = "macos")]
             {

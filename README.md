@@ -137,6 +137,43 @@ npm run dev -w @tikz-editor/web
 
 The web build has no local TeX toolchain, so `\includegraphics` and user macros are unsupported there — the app falls back to MathJax for everything.
 
+## Agent debug features
+
+Features intended for coding agents (Claude Code and similar) that drive the
+app for testing, not for end-user workflows.
+
+### Agent screenshot capture
+
+A file-triggered mechanism for an external agent to obtain a pixel-level PNG
+of the currently-rendered canvas. Uses the WebView's own SVG rasterizer
+(same rendering pipeline that paints to the screen), so it is
+**cross-platform** (macOS / Windows / Linux) and needs no OS-level Screen
+Recording permission — no TCC prompt ever fires.
+
+**Flow for the agent** (paths shown are macOS `$TMPDIR`; see
+`desktop_agent_screenshot_paths` for the resolved path on any host):
+
+```bash
+# 1. Trigger a capture
+touch "$TMPDIR/tikz-editor-agent-screenshot-request"
+
+# 2. Wait a moment for the app to write the PNG.
+#    The app removes the trigger file when the write is complete, so
+#    absence of the trigger is a "done" signal:
+while [ -f "$TMPDIR/tikz-editor-agent-screenshot-request" ]; do sleep 0.1; done
+
+# 3. Read the result
+open "$TMPDIR/tikz-editor-agent-screenshot.png"    # or feed to your agent
+```
+
+The written PNG captures the largest SVG element on the page (typically the
+main canvas), at the current view's pixel dimensions × devicePixelRatio.
+No app UI chrome — just the rendered figure — because the capture is
+scoped to the canvas SVG rather than the whole window.
+
+Wiring lives in [`apps/desktop/src-tauri/src/lib.rs`](apps/desktop/src-tauri/src/lib.rs) (`start_agent_screenshot_watcher`, `desktop_write_agent_screenshot`) and
+[`apps/desktop/src/agent-screenshot.ts`](apps/desktop/src/agent-screenshot.ts) (`installAgentScreenshotHandler`).
+
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for build instructions, architecture overview, contribution guidelines, and the full script catalog (tests, capability matrix, corpus, profiling).
