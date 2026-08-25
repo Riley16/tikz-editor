@@ -94,7 +94,16 @@ function createNodeCompileFn(): NativeTexCompileFn {
       const svgOut = join(workDir, "output.svg");
       const dvisvgmRun = spawnSync(
         "dvisvgm",
-        ["--page=1", "--bbox=min", "--exact", "--font-format=woff2", "-o", "output.svg", "input.dvi"],
+        [
+          "--page=1",
+          "--bbox=min",
+          "--exact",
+          "--font-format=woff2",
+          "--no-styles",
+          "-o",
+          "output.svg",
+          "input.dvi"
+        ],
         { cwd: workDir, env, encoding: "utf8" }
       );
       if (dvisvgmRun.status !== 0 || !existsSync(svgOut)) {

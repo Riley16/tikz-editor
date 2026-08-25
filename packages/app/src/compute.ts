@@ -657,6 +657,28 @@ function invalidateTextEngine(): void {
   resolvedTextEngine = null;
 }
 
+/**
+ * Get the shared text engine — same hybrid used by `computeSnapshot`. Exposed
+ * so other main-thread render paths (currently: thumbnail rendering when a
+ * native compile fn is registered) can reuse the same engine + cache instead
+ * of spinning up their own MathJax-only fallback. Returning the same engine
+ * instance across callers means fragments compiled by the canvas render also
+ * satisfy thumbnail requests — no duplicate compiles for the same content.
+ */
+export function getSharedTextEngine(): NodeTextEngine | null | Promise<NodeTextEngine | null> {
+  return getOptionalTextEngine();
+}
+
+/**
+ * True iff a native TeX compile function is currently registered. Callers
+ * (e.g. the thumbnail renderer) use this to decide whether to route through
+ * the shared engine (which routes fragments to native) or fall back to a
+ * default MathJax-only path.
+ */
+export function hasNativeTexCompilerRegistered(): boolean {
+  return currentNativeTexCompileFn != null;
+}
+
 function getOptionalTextEngine(): NodeTextEngine | null | Promise<NodeTextEngine | null> {
   if (hasResolvedTextEngine) {
     return resolvedTextEngine;

@@ -4,7 +4,6 @@ import { createHybridNodeTextEngine } from "../packages/core/src/text/hybrid-eng
 import type {
   NodeTextEngine,
   NodeTextMeasureRequest,
-  NodeTextMetrics,
   NodeTextRenderPayload
 } from "../packages/core/src/text/types.js";
 
@@ -34,6 +33,13 @@ function baseMeasure(text: string): NodeTextMeasureRequest {
   };
 }
 
+/**
+ * The hybrid engine's job is now very small: when a native TeX engine is
+ * provided, use it for everything (native's error-render caching means
+ * failures are visible, not silent-fallbacks to plain text — that's the
+ * whole point). When no native engine is provided, fall back to MathJax
+ * transparently — this is what the web build sees.
+ */
 describe("createHybridNodeTextEngine", () => {
   it("returns the raw mathjax engine when no native engine is provided", () => {
     const mathjax = makeFakeEngine();
@@ -41,149 +47,91 @@ describe("createHybridNodeTextEngine", () => {
     expect(hybrid).toBe(mathjax);
   });
 
-  it("routes plain text through MathJax", () => {
-    const mathjax = makeFakeEngine({
-      validate: vi.fn(() => null),
-      measure: vi.fn(() => null)
-    });
+  it("returns the native engine when one is provided (native-first, no routing)", () => {
+    const mathjax = makeFakeEngine();
+    const native = makeFakeEngine();
+    const hybrid = createHybridNodeTextEngine(mathjax, native);
+    expect(hybrid).toBe(native);
+  });
+
+  it("routes every fragment (plain text, math, macros, includegraphics) to native", () => {
+    const mathjax = makeFakeEngine();
     const native = makeFakeEngine({
       validate: vi.fn(() => null),
       measure: vi.fn(() => null)
     });
     const hybrid = createHybridNodeTextEngine(mathjax, native);
 
-    hybrid.validate("Hello world");
     hybrid.measure(baseMeasure("Hello world"));
+    hybrid.measure(baseMeasure("$x^2 + y^2$"));
+    hybrid.measure(baseMeasure("\\myMacro{hi}"));
+    hybrid.measure(baseMeasure("\\includegraphics{a.png}"));
 
-    expect(mathjax.validate).toHaveBeenCalledTimes(1);
-    expect(mathjax.measure).toHaveBeenCalledTimes(1);
-    expect(native.validate).not.toHaveBeenCalled();
-    expect(native.measure).not.toHaveBeenCalled();
-  });
-
-  it("routes MathJax-safe math through MathJax (not native)", () => {
-    const mathjax = makeFakeEngine();
-    const native = makeFakeEngine();
-    const hybrid = createHybridNodeTextEngine(mathjax, native);
-
-    hybrid.measure(baseMeasure("$x^2 + y^2 = r^2$"));
-
-    expect(mathjax.measure).toHaveBeenCalledTimes(1);
-    expect(native.measure).not.toHaveBeenCalled();
-  });
-
-  it("routes \\includegraphics fragments through the native engine", () => {
-    const mathjax = makeFakeEngine();
-    const native = makeFakeEngine();
-    const hybrid = createHybridNodeTextEngine(mathjax, native);
-
-    hybrid.validate("\\includegraphics{plot.png}");
-    hybrid.measure(baseMeasure("\\includegraphics[width=3cm]{plot.png}"));
-
-    expect(native.validate).toHaveBeenCalledTimes(1);
-    expect(native.measure).toHaveBeenCalledTimes(1);
-    expect(mathjax.validate).not.toHaveBeenCalled();
+    expect(native.measure).toHaveBeenCalledTimes(4);
     expect(mathjax.measure).not.toHaveBeenCalled();
   });
 
-  it("renderFromCache prefers a native cache hit but falls back to mathjax", () => {
+  it("validate calls also route to native", () => {
+    const mathjax = makeFakeEngine();
+    const native = makeFakeEngine();
+    const hybrid = createHybridNodeTextEngine(mathjax, native);
+
+    hybrid.validate("Hello");
+    hybrid.validate("$x^2$");
+
+    expect(native.validate).toHaveBeenCalledTimes(2);
+    expect(mathjax.validate).not.toHaveBeenCalled();
+  });
+
+  it("renderFromCache reads directly from native", () => {
     const nativePayload: NodeTextRenderPayload = {
       cacheKey: "native-tex:abc",
       viewBox: { x: 0, y: 0, width: 10, height: 10 },
       body: "<rect/>"
     };
-    const mathjaxPayload: NodeTextRenderPayload = {
-      cacheKey: "some-mj-key",
-      viewBox: { x: 0, y: 0, width: 20, height: 20 },
-      body: "<text/>"
-    };
-    const mathjax = makeFakeEngine({
-      renderFromCache: (key) => (key === "some-mj-key" ? mathjaxPayload : null)
-    });
+    const mathjax = makeFakeEngine();
     const native = makeFakeEngine({
       renderFromCache: (key) => (key === "native-tex:abc" ? nativePayload : null)
     });
     const hybrid = createHybridNodeTextEngine(mathjax, native);
 
     expect(hybrid.renderFromCache("native-tex:abc")).toBe(nativePayload);
-    expect(hybrid.renderFromCache("some-mj-key")).toBe(mathjaxPayload);
     expect(hybrid.renderFromCache("nonexistent")).toBeNull();
   });
 
-  it("flushPending awaits both engines and concatenates their finalized keys", async () => {
-    const mathjax = makeFakeEngine({
-      flushPending: vi.fn(async () => ["mj-1", "mj-2"] as readonly string[])
-    });
+  it("flushPending is the native engine's flushPending", async () => {
     const native = makeFakeEngine({
-      flushPending: vi.fn(async () => ["native-tex:x"] as readonly string[])
+      flushPending: vi.fn(async () => ["native-tex:x", "native-tex:y"] as readonly string[])
     });
+    const mathjax = makeFakeEngine();
     const hybrid = createHybridNodeTextEngine(mathjax, native);
-
     const keys = (await hybrid.flushPending?.()) ?? [];
-    expect(keys).toEqual(["mj-1", "mj-2", "native-tex:x"]);
-    expect(mathjax.flushPending).toHaveBeenCalledTimes(1);
+    expect(keys).toEqual(["native-tex:x", "native-tex:y"]);
     expect(native.flushPending).toHaveBeenCalledTimes(1);
   });
 
-  it("flushPending handles engines without their own flushPending", async () => {
-    const mathjax = makeFakeEngine({ flushPending: undefined });
-    const native = makeFakeEngine({ flushPending: undefined });
-    const hybrid = createHybridNodeTextEngine(mathjax, native);
-    const keys = (await hybrid.flushPending?.()) ?? [];
-    expect(keys).toEqual([]);
-  });
-
-  it("preserves the metrics object identity returned by the underlying engine", () => {
-    const metrics: NodeTextMetrics = {
-      cacheKey: "native-tex:xyz",
-      width: 100,
-      height: 50,
-      baselineY: -25,
-      midLineY: 0,
-      paragraphId: null,
-      renderSourceText: "\\includegraphics{a.png}"
-    };
-    const native = makeFakeEngine({ measure: () => metrics });
-    const mathjax = makeFakeEngine();
-    const hybrid = createHybridNodeTextEngine(mathjax, native);
-    expect(hybrid.measure(baseMeasure("\\includegraphics{a.png}"))).toBe(metrics);
-  });
-
-  it("with userMacroNames, routes text using a user macro to native", () => {
-    const mathjax = makeFakeEngine();
-    const native = makeFakeEngine();
-    const hybrid = createHybridNodeTextEngine(mathjax, native, {
-      userMacroNames: new Set(["myMacro"])
+  it("still delegates to MathJax when native is absent (web build)", () => {
+    const mathjaxValidate = vi.fn(() => null);
+    const mathjaxMeasure = vi.fn(() => null);
+    const mathjax = makeFakeEngine({
+      validate: mathjaxValidate,
+      measure: mathjaxMeasure
     });
+    const hybrid = createHybridNodeTextEngine(mathjax, null);
 
-    hybrid.measure(baseMeasure("\\myMacro{hello}"));
-
-    expect(native.measure).toHaveBeenCalledTimes(1);
-    expect(mathjax.measure).not.toHaveBeenCalled();
-  });
-
-  it("with userMacroNames, still routes plain text to MathJax", () => {
-    const mathjax = makeFakeEngine();
-    const native = makeFakeEngine();
-    const hybrid = createHybridNodeTextEngine(mathjax, native, {
-      userMacroNames: new Set(["myMacro"])
-    });
-
-    hybrid.measure(baseMeasure("Hello world"));
+    hybrid.validate("Hello");
     hybrid.measure(baseMeasure("$x^2$"));
 
-    expect(mathjax.measure).toHaveBeenCalledTimes(2);
-    expect(native.measure).not.toHaveBeenCalled();
+    expect(mathjaxValidate).toHaveBeenCalledTimes(1);
+    expect(mathjaxMeasure).toHaveBeenCalledTimes(1);
   });
 
-  it("without userMacroNames, only \\includegraphics routes to native", () => {
+  it("accepts (and ignores) userMacroNames option for API compatibility", () => {
     const mathjax = makeFakeEngine();
     const native = makeFakeEngine();
-    const hybrid = createHybridNodeTextEngine(mathjax, native);
-
-    hybrid.measure(baseMeasure("\\customMacro{x}"));
-
-    expect(mathjax.measure).toHaveBeenCalledTimes(1);
-    expect(native.measure).not.toHaveBeenCalled();
+    const hybrid = createHybridNodeTextEngine(mathjax, native, {
+      userMacroNames: new Set(["ignored"])
+    });
+    expect(hybrid).toBe(native);
   });
 });

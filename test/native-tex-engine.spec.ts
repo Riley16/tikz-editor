@@ -250,16 +250,19 @@ describe("createNativeTexNodeTextEngine", () => {
     expect(kindsSeen).toEqual(["toolchain-missing", "compile-failed"]);
   });
 
-  it("does not cache failed compiles (retries on next measure())", async () => {
-    let call = 0;
+  it("caches failed compiles as visible error renders (no retry on same cache key)", async () => {
+    // Deliberate behavior change: prior versions retried failed compiles on
+    // every measure(); now failures are cached with a red-bordered error SVG
+    // so the user sees a clear "compile failed" indicator in the canvas
+    // instead of a silent fall-back to raw source text. Recovery: any edit
+    // to the fragment or preamble changes the cache key, triggering a fresh
+    // compile automatically.
     const compile = vi.fn(
-      fakeCompile(() => {
-        call += 1;
-        if (call === 1) {
-          return { ok: false, kind: "runtime-error", message: "transient" };
-        }
-        return { ok: true, svg: stubSvg() };
-      })
+      fakeCompile(() => ({
+        ok: false,
+        kind: "compile-failed",
+        message: "! LaTeX Error: ..."
+      }))
     );
     const engine = createNativeTexNodeTextEngine({
       compile,
@@ -272,7 +275,37 @@ describe("createNativeTexNodeTextEngine", () => {
     engine.measure(baseMeasureRequest("\\includegraphics{a.png}"));
     await engine.flushPending?.();
 
-    expect(compile).toHaveBeenCalledTimes(2);
+    // Second measure hits the cached error render, no re-compile.
+    expect(compile).toHaveBeenCalledTimes(1);
+
+    // The cached "render" is the error indicator, not null, so semantic
+    // will use it (mode: "mathjax") and svg emit will draw the red box.
+    const metrics = engine.measure(baseMeasureRequest("\\includegraphics{a.png}"));
+    expect(metrics).not.toBeNull();
+    const payload = engine.renderFromCache(metrics!.cacheKey);
+    expect(payload).not.toBeNull();
+    expect(payload!.body).toContain("stroke=\"#d33\"");
+    expect(payload!.body).toContain("compile-failed");
+  });
+
+  it("caches runtime-error failures the same way (visible error render)", async () => {
+    const compile = fakeCompile(() => ({
+      ok: false,
+      kind: "runtime-error",
+      message: "transient"
+    }));
+    const engine = createNativeTexNodeTextEngine({
+      compile,
+      workingDirectory: null
+    });
+
+    engine.measure(baseMeasureRequest("\\includegraphics{a.png}"));
+    await engine.flushPending?.();
+
+    const metrics = engine.measure(baseMeasureRequest("\\includegraphics{a.png}"));
+    expect(metrics).not.toBeNull();
+    const payload = engine.renderFromCache(metrics!.cacheKey);
+    expect(payload!.body).toContain("runtime-error");
   });
 
   it("returns null from renderFromCache for keys that don't own the prefix", () => {
