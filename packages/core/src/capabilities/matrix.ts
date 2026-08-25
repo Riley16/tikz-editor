@@ -655,6 +655,6 @@ export const capabilityMatrix: CapabilityMatrix = {
     edit: "none",
     fixtures: ["include_graphics_node"],
     notes:
-      "\\includegraphics inside node text is rendered by the hybrid text engine's native-TeX path: the fragment is compiled by an injected compile function (desktop-only), the resulting SVG (with base64-inlined image data) replaces the MathJax payload. Parser and semantic layers treat the call site as opaque node text — no first-class scene element. When no compile function is available (web build, or missing TeX toolchain) the fragment silent-skips as before Phase 1 of the native TeX plan."
+      "Node text containing \\includegraphics (or any user-defined preamble macro like \\newcommand{\\foo}{...}) is routed through the hybrid text engine's native-TeX path: the fragment is wrapped with the document's threaded preamble and compiled by an injected compile function (desktop-only). The returned SVG (with base64-inlined image data) replaces the MathJax payload. Parser and semantic layers treat the call site as opaque node text — no first-class scene element. When no compile function is available (web build, or missing TeX toolchain) the fragment silent-skips as before. Constructs living outside node text (e.g. \\begin{axis} pgfplots environments) are not covered — those require whole-figure compilation, deferred to a later phase."
   }
 };

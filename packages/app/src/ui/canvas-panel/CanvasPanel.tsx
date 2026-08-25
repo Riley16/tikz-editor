@@ -46,6 +46,7 @@ getKnuthPlassLineRangeFromPoint
 import { createHybridNodeTextEngine } from "tikz-editor/text/hybrid-engine";
 import { createMathJaxNodeTextEngine,getActiveMathJaxOutputJax } from "tikz-editor/text/mathjax-engine";
 import { createNativeTexNodeTextEngine } from "tikz-editor/text/native-tex-engine";
+import { collectPreambleMacros, extractUserPreamble } from "tikz-editor/text/preamble-extract";
 import type { NodeTextEngine,NodeTextLayoutKind } from "tikz-editor/text/types";
 import { useShallow } from "zustand/react/shallow";
 import type { AppMenuCommandId } from "../../app-menu";
@@ -1434,6 +1435,11 @@ export const CanvasPanel = memo(function CanvasPanel({
     return slash > 0 ? activeFileRefPath.slice(0, slash) : null;
   }, [activeFileRefPath]);
   const nativeTexCompileFn = platform.latex?.compileTexFragment ?? null;
+  const nativeTexUserPreamble = useMemo(() => extractUserPreamble(source), [source]);
+  const nativeTexUserMacros = useMemo(
+    () => collectPreambleMacros(nativeTexUserPreamble),
+    [nativeTexUserPreamble]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -1444,10 +1450,13 @@ export const CanvasPanel = memo(function CanvasPanel({
         const native = nativeTexCompileFn
           ? createNativeTexNodeTextEngine({
               compile: nativeTexCompileFn,
-              workingDirectory: nativeTexWorkingDirectory
+              workingDirectory: nativeTexWorkingDirectory,
+              userPreamble: nativeTexUserPreamble
             })
           : null;
-        const engine = createHybridNodeTextEngine(mathjax, native);
+        const engine = createHybridNodeTextEngine(mathjax, native, {
+          userMacroNames: nativeTexUserMacros
+        });
         textEngineRef.current = engine;
         setActiveTextEngine(engine);
       } catch {
@@ -1459,7 +1468,13 @@ export const CanvasPanel = memo(function CanvasPanel({
     return () => {
       cancelled = true;
     };
-  }, [mathJaxFont, nativeTexCompileFn, nativeTexWorkingDirectory]);
+  }, [
+    mathJaxFont,
+    nativeTexCompileFn,
+    nativeTexWorkingDirectory,
+    nativeTexUserPreamble,
+    nativeTexUserMacros
+  ]);
 
   useEffect(() => {
     function onPointerMove(event: PointerEvent) {

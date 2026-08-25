@@ -21,6 +21,10 @@ export {
   textRequiresNativeTexEngine,
   collectIncludeGraphicsPaths
 } from "./text/native-tex-detect.js";
+export {
+  extractUserPreamble,
+  collectPreambleMacros
+} from "./text/preamble-extract.js";
 export type * from "./text/native-tex-types.js";
 export { collectSymbols, resolveDocHoverTarget } from "./completion/index.js";
 export {

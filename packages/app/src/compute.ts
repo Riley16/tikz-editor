@@ -92,6 +92,7 @@ let hasResolvedTextEngine = false;
 let resolvedTextEngine: NodeTextEngine | null = null;
 let currentNativeTexCompileFn: NativeTexCompileFn | null = null;
 let currentNativeTexWorkingDirectory: string | null = null;
+let currentNativeTexUserPreamble: string = "";
 
 function resolveSvgPadding(source: string, activeFigureId: string | null | undefined): number {
   try {
@@ -622,25 +623,31 @@ export function setMathJaxFont(font: MathJaxFont): void {
 
 /**
  * Register (or clear) a native-TeX compile function used to render fragments
- * MathJax cannot handle (currently: `\includegraphics`). Passing `null`
- * disables the native path and reverts to pure MathJax rendering.
+ * MathJax cannot handle (currently: `\includegraphics` plus, when
+ * `userPreamble` provides the right packages, pgfplots and other constructs
+ * requiring a real TeX toolchain). Passing `compile = null` disables the
+ * native path and reverts to pure MathJax rendering.
  *
- * Called from App.tsx whenever the active platform's compile fn or the active
- * document's on-disk directory changes. Resets the cached text engine so the
- * next `computeSnapshot()` builds a fresh hybrid.
+ * Called from App.tsx whenever the active platform's compile fn, the active
+ * document's on-disk directory, or the document's user-authored preamble
+ * changes. Resets the cached text engine so the next `computeSnapshot()`
+ * builds a fresh hybrid.
  */
 export function setNativeTexCompiler(
   compile: NativeTexCompileFn | null,
-  workingDirectory: string | null
+  workingDirectory: string | null,
+  userPreamble: string = ""
 ): void {
   if (
     compile === currentNativeTexCompileFn &&
-    workingDirectory === currentNativeTexWorkingDirectory
+    workingDirectory === currentNativeTexWorkingDirectory &&
+    userPreamble === currentNativeTexUserPreamble
   ) {
     return;
   }
   currentNativeTexCompileFn = compile;
   currentNativeTexWorkingDirectory = workingDirectory;
+  currentNativeTexUserPreamble = userPreamble;
   invalidateTextEngine();
 }
 
@@ -658,6 +665,7 @@ function getOptionalTextEngine(): NodeTextEngine | null | Promise<NodeTextEngine
     const font = currentMathJaxFont;
     const nativeCompile = currentNativeTexCompileFn;
     const nativeWorkingDirectory = currentNativeTexWorkingDirectory;
+    const nativeUserPreamble = currentNativeTexUserPreamble;
     textEnginePromise = (async () => {
       try {
         const { createMathJaxNodeTextEngine } = await import("tikz-editor/text/mathjax-engine");
@@ -665,15 +673,22 @@ function getOptionalTextEngine(): NodeTextEngine | null | Promise<NodeTextEngine
         if (!nativeCompile) {
           return mathjax;
         }
-        const [{ createNativeTexNodeTextEngine }, { createHybridNodeTextEngine }] = await Promise.all([
+        const [
+          { createNativeTexNodeTextEngine },
+          { createHybridNodeTextEngine },
+          { collectPreambleMacros }
+        ] = await Promise.all([
           import("tikz-editor/text/native-tex-engine"),
-          import("tikz-editor/text/hybrid-engine")
+          import("tikz-editor/text/hybrid-engine"),
+          import("tikz-editor/text/preamble-extract")
         ]);
         const native = createNativeTexNodeTextEngine({
           compile: nativeCompile,
-          workingDirectory: nativeWorkingDirectory
+          workingDirectory: nativeWorkingDirectory,
+          userPreamble: nativeUserPreamble
         });
-        return createHybridNodeTextEngine(mathjax, native);
+        const userMacroNames = collectPreambleMacros(nativeUserPreamble);
+        return createHybridNodeTextEngine(mathjax, native, { userMacroNames });
       } catch {
         return null;
       }
@@ -681,7 +696,8 @@ function getOptionalTextEngine(): NodeTextEngine | null | Promise<NodeTextEngine
       if (
         font === currentMathJaxFont &&
         nativeCompile === currentNativeTexCompileFn &&
-        nativeWorkingDirectory === currentNativeTexWorkingDirectory
+        nativeWorkingDirectory === currentNativeTexWorkingDirectory &&
+        nativeUserPreamble === currentNativeTexUserPreamble
       ) {
         hasResolvedTextEngine = true;
         resolvedTextEngine = engine;

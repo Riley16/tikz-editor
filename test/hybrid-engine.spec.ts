@@ -148,4 +148,42 @@ describe("createHybridNodeTextEngine", () => {
     const hybrid = createHybridNodeTextEngine(mathjax, native);
     expect(hybrid.measure(baseMeasure("\\includegraphics{a.png}"))).toBe(metrics);
   });
+
+  it("with userMacroNames, routes text using a user macro to native", () => {
+    const mathjax = makeFakeEngine();
+    const native = makeFakeEngine();
+    const hybrid = createHybridNodeTextEngine(mathjax, native, {
+      userMacroNames: new Set(["myMacro"])
+    });
+
+    hybrid.measure(baseMeasure("\\myMacro{hello}"));
+
+    expect(native.measure).toHaveBeenCalledTimes(1);
+    expect(mathjax.measure).not.toHaveBeenCalled();
+  });
+
+  it("with userMacroNames, still routes plain text to MathJax", () => {
+    const mathjax = makeFakeEngine();
+    const native = makeFakeEngine();
+    const hybrid = createHybridNodeTextEngine(mathjax, native, {
+      userMacroNames: new Set(["myMacro"])
+    });
+
+    hybrid.measure(baseMeasure("Hello world"));
+    hybrid.measure(baseMeasure("$x^2$"));
+
+    expect(mathjax.measure).toHaveBeenCalledTimes(2);
+    expect(native.measure).not.toHaveBeenCalled();
+  });
+
+  it("without userMacroNames, only \\includegraphics routes to native", () => {
+    const mathjax = makeFakeEngine();
+    const native = makeFakeEngine();
+    const hybrid = createHybridNodeTextEngine(mathjax, native);
+
+    hybrid.measure(baseMeasure("\\customMacro{x}"));
+
+    expect(mathjax.measure).toHaveBeenCalledTimes(1);
+    expect(native.measure).not.toHaveBeenCalled();
+  });
 });

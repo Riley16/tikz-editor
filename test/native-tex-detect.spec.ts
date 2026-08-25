@@ -41,6 +41,46 @@ describe("textRequiresNativeTexEngine", () => {
   });
 });
 
+describe("textRequiresNativeTexEngine with user-defined macros", () => {
+  it("routes text mentioning a user macro to native", () => {
+    const userMacros = new Set(["myBold"]);
+    expect(textRequiresNativeTexEngine("\\myBold{hello}", userMacros)).toBe(true);
+  });
+
+  it("does not route text with no user macro appearances", () => {
+    const userMacros = new Set(["myBold"]);
+    expect(textRequiresNativeTexEngine("plain text", userMacros)).toBe(false);
+    expect(textRequiresNativeTexEngine("\\textbf{hi}", userMacros)).toBe(false);
+  });
+
+  it("does not partial-match longer macro names", () => {
+    // If userMacros = {"my"}, the token "\\myThing" should NOT route since
+    // "my" is not the full control sequence.
+    const userMacros = new Set(["my"]);
+    expect(textRequiresNativeTexEngine("\\myThing{x}", userMacros)).toBe(false);
+  });
+
+  it("still routes \\includegraphics regardless of macro set", () => {
+    expect(
+      textRequiresNativeTexEngine("\\includegraphics{a.png}", new Set())
+    ).toBe(true);
+    expect(
+      textRequiresNativeTexEngine("\\includegraphics{a.png}", undefined)
+    ).toBe(true);
+  });
+
+  it("routes when text contains multiple user macros", () => {
+    const userMacros = new Set(["foo", "bar"]);
+    expect(
+      textRequiresNativeTexEngine("prefix \\bar{x} suffix", userMacros)
+    ).toBe(true);
+  });
+
+  it("empty macro set behaves like undefined (no routing beyond includegraphics)", () => {
+    expect(textRequiresNativeTexEngine("\\foo{x}", new Set())).toBe(false);
+  });
+});
+
 describe("collectIncludeGraphicsPaths", () => {
   it("returns an empty list when no matches are present", () => {
     expect(collectIncludeGraphicsPaths("Hello world")).toEqual([]);

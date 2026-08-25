@@ -186,6 +186,35 @@ describe.skipIf(!toolchainReady)("native TeX engine (integration with real latex
     expect(payload!.body.length).toBeGreaterThan(0);
   }, 30_000);
 
+  it("compiles a fragment using a user-defined macro when preamble is threaded", async () => {
+    const engine = createNativeTexNodeTextEngine({
+      compile: createNodeCompileFn(),
+      workingDirectory: null,
+      userPreamble: "\\newcommand{\\myGreeting}{Hi from a user macro}"
+    });
+
+    const request = {
+      text: "\\myGreeting",
+      mode: "text" as const,
+      textWidthPt: null,
+      fontStyle: "normal" as const,
+      fontWeight: "normal" as const,
+      fontFamily: "serif" as const,
+      fontSizePt: 10
+    };
+
+    expect(engine.measure(request)).toBeNull();
+    await engine.flushPending?.();
+    const metrics = engine.measure(request);
+    expect(metrics).not.toBeNull();
+    expect(metrics!.width).toBeGreaterThan(0);
+    const payload = engine.renderFromCache(metrics!.cacheKey);
+    expect(payload).not.toBeNull();
+    // The rendered SVG should contain glyphs — proof the macro expanded and
+    // the compiler produced actual output for it (not just an empty box).
+    expect(payload!.body.length).toBeGreaterThan(50);
+  }, 30_000);
+
   it("resolves and inlines a referenced PNG when workingDirectory is provided", async () => {
     const workDir = mkdtempSync(join(tmpdir(), "native-tex-integration-fixture-"));
     try {

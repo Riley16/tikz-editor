@@ -47,8 +47,20 @@ export type NativeTexEngineOptions = {
    * fine for the web/testing case; wired up on desktop via a small IPC probe.
    */
   mtimeReader?: NativeTexAssetMtimeReader;
-  /** Override the LaTeX preamble injected around each fragment. */
+  /**
+   * Override the LaTeX preamble injected around each fragment. Bypasses the
+   * standalone-tikz default entirely — intended for tests / non-standalone
+   * document classes. Most callers should use `userPreamble` instead.
+   */
   preamble?: string;
+  /**
+   * Additive user-authored preamble content threaded from the parent
+   * document's `\usepackage`s / `\newcommand`s / `\tikzset`s. Appended after
+   * the default standalone preamble so user macros are in scope when the
+   * fragment compiles. Folded into the cache key — editing the preamble
+   * invalidates every cached fragment for this engine.
+   */
+  userPreamble?: string;
   /**
    * Called at most once per unique failure kind. Used by the app shell to
    * surface a single non-repeating diagnostic (e.g. "TeX not detected") rather
@@ -65,7 +77,14 @@ export type NativeTexEngineOptions = {
  * background, exposes new keys via flushPending()).
  */
 export function createNativeTexNodeTextEngine(opts: NativeTexEngineOptions): NodeTextEngine {
-  const preamble = opts.preamble ?? DEFAULT_STANDALONE_PREAMBLE;
+  const basePreamble = opts.preamble ?? DEFAULT_STANDALONE_PREAMBLE;
+  const userPreamble = opts.userPreamble?.trim() ?? "";
+  const preamble = userPreamble.length > 0 ? `${basePreamble}${userPreamble}\n` : basePreamble;
+  // Cache-key salt so fragments compiled against different preambles never
+  // collide. The engine is normally recreated on preamble change (which
+  // creates a fresh cache anyway), but salting is a cheap defense against
+  // reuse bugs.
+  const preambleSalt = simpleHash(preamble);
   const renderCache = new Map<string, CachedRender>();
   const validationCache = new Map<string, NodeTextValidationIssue | null>();
   const inFlightCompiles = new Map<string, Promise<void>>();
@@ -82,7 +101,7 @@ export function createNativeTexNodeTextEngine(opts: NativeTexEngineOptions): Nod
   }
 
   async function computeCacheKey(text: string): Promise<string> {
-    const parts: string[] = [text];
+    const parts: string[] = [`preamble=${preambleSalt}`, text];
     if (opts.workingDirectory != null) {
       parts.push(`cwd=${opts.workingDirectory}`);
     }
@@ -168,7 +187,8 @@ export function createNativeTexNodeTextEngine(opts: NativeTexEngineOptions): Nod
       const fastKey = tryComputeCacheKeySync(
         request.text,
         opts.workingDirectory,
-        opts.mtimeReader != null
+        opts.mtimeReader != null,
+        preambleSalt
       );
       if (fastKey != null) {
         return measureWithKey(fastKey, request, scale);
@@ -244,12 +264,13 @@ export function createNativeTexNodeTextEngine(opts: NativeTexEngineOptions): Nod
 function tryComputeCacheKeySync(
   text: string,
   workingDirectory: string | null,
-  hasMtimeReader: boolean
+  hasMtimeReader: boolean,
+  preambleSalt: string
 ): string | null {
   if (hasMtimeReader) {
     return null;
   }
-  const parts: string[] = [text];
+  const parts: string[] = [`preamble=${preambleSalt}`, text];
   if (workingDirectory != null) {
     parts.push(`cwd=${workingDirectory}`);
   }

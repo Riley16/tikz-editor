@@ -16,8 +16,33 @@ const INCLUDE_GRAPHICS_TEST_PATTERN =
 const INCLUDE_GRAPHICS_CAPTURE_PATTERN =
   /\\includegraphics\b\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/g;
 
-export function textRequiresNativeTexEngine(text: string): boolean {
-  return INCLUDE_GRAPHICS_TEST_PATTERN.test(text);
+/**
+ * All `\`-prefixed tokens in the fragment. Used to decide whether any
+ * user-defined preamble macro appears in the text (which means MathJax will
+ * silent-fail — it doesn't know about the user's macros — so we should route
+ * the fragment through the native TeX engine where the threaded preamble
+ * makes the macro definitions available).
+ */
+const CONTROL_SEQUENCE_PATTERN = /\\([a-zA-Z@]+)/g;
+
+export function textRequiresNativeTexEngine(
+  text: string,
+  userMacroNames?: ReadonlySet<string>
+): boolean {
+  if (INCLUDE_GRAPHICS_TEST_PATTERN.test(text)) {
+    return true;
+  }
+  if (userMacroNames && userMacroNames.size > 0) {
+    CONTROL_SEQUENCE_PATTERN.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = CONTROL_SEQUENCE_PATTERN.exec(text)) !== null) {
+      const name = match[1];
+      if (name && userMacroNames.has(name)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function collectIncludeGraphicsPaths(text: string): string[] {

@@ -128,7 +128,77 @@ describe("createNativeTexNodeTextEngine", () => {
     await engine.flushPending?.();
 
     expect(receivedSource).toContain("\\usepackage{myextra}");
-    expect(receivedSource).not.toContain("\\documentclass[tikz,border=0pt]{standalone}");
+    expect(receivedSource).not.toContain("\\documentclass[dvisvgm,border=0pt]{standalone}");
+  });
+
+  it("appends userPreamble after the default preamble in the compile source", async () => {
+    let receivedSource = "";
+    const compile = fakeCompile((source) => {
+      receivedSource = source;
+      return { ok: true, svg: stubSvg() };
+    });
+    const engine = createNativeTexNodeTextEngine({
+      compile,
+      workingDirectory: null,
+      userPreamble: "\\usepackage{pgfplots}\n\\newcommand{\\myMacro}{hello}"
+    });
+
+    engine.measure(baseMeasureRequest("\\includegraphics{plot.png}"));
+    await engine.flushPending?.();
+
+    // Both the default and the user preamble should be present, with the
+    // user's content appearing AFTER the default (so they can override).
+    expect(receivedSource).toContain("\\documentclass[dvisvgm,border=0pt]{standalone}");
+    expect(receivedSource).toContain("\\usepackage{pgfplots}");
+    expect(receivedSource).toContain("\\newcommand{\\myMacro}{hello}");
+    const defaultIdx = receivedSource.indexOf("\\usepackage{graphicx}");
+    const userIdx = receivedSource.indexOf("\\usepackage{pgfplots}");
+    expect(userIdx).toBeGreaterThan(defaultIdx);
+  });
+
+  it("different userPreambles produce different cache keys (invalidates on change)", async () => {
+    const compile = vi.fn(fakeCompile(() => ({ ok: true, svg: stubSvg() })));
+    const engineA = createNativeTexNodeTextEngine({
+      compile,
+      workingDirectory: null,
+      userPreamble: "\\usepackage{pgfplots}"
+    });
+    const engineB = createNativeTexNodeTextEngine({
+      compile,
+      workingDirectory: null,
+      userPreamble: "\\usepackage{tikz-cd}"
+    });
+
+    engineA.measure(baseMeasureRequest("\\includegraphics{a.png}"));
+    engineB.measure(baseMeasureRequest("\\includegraphics{a.png}"));
+
+    await engineA.flushPending?.();
+    await engineB.flushPending?.();
+
+    expect(compile).toHaveBeenCalledTimes(2);
+  });
+
+  it("empty userPreamble is treated as absent (no extra whitespace, no cache-key change)", async () => {
+    const compile = vi.fn(fakeCompile(() => ({ ok: true, svg: stubSvg() })));
+    const engineWithout = createNativeTexNodeTextEngine({
+      compile,
+      workingDirectory: null
+    });
+    const engineWithEmpty = createNativeTexNodeTextEngine({
+      compile,
+      workingDirectory: null,
+      userPreamble: "   \n  "
+    });
+
+    engineWithout.measure(baseMeasureRequest("\\includegraphics{a.png}"));
+    await engineWithout.flushPending?.();
+    const withoutKey = engineWithout.measure(baseMeasureRequest("\\includegraphics{a.png}"))!.cacheKey;
+
+    engineWithEmpty.measure(baseMeasureRequest("\\includegraphics{a.png}"));
+    await engineWithEmpty.flushPending?.();
+    const emptyKey = engineWithEmpty.measure(baseMeasureRequest("\\includegraphics{a.png}"))!.cacheKey;
+
+    expect(emptyKey).toBe(withoutKey);
   });
 
   it("surfaces compile failures once per kind via onCompileFailure", async () => {

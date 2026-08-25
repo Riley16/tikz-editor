@@ -7,6 +7,16 @@ import type {
 } from "./types.js";
 import { textRequiresNativeTexEngine } from "./native-tex-detect.js";
 
+export type HybridNodeTextEngineOptions = {
+  /**
+   * Set of user-defined macro names (without the leading `\`) — typically
+   * extracted from the parent document's preamble via `collectPreambleMacros`.
+   * Any fragment mentioning one of these will be routed to the native
+   * engine so the threaded-preamble compile expands the macro correctly.
+   */
+  userMacroNames?: ReadonlySet<string>;
+};
+
 /**
  * Wrap the existing MathJax engine with an optional native-TeX engine so
  * that a node's text is routed to whichever engine can render it correctly.
@@ -14,7 +24,8 @@ import { textRequiresNativeTexEngine } from "./native-tex-detect.js";
  * Design notes:
  * - Routing is per-call and cheap (a single regex probe). MathJax remains the
  *   fast default; native is only reached when the fragment structurally
- *   requires it (currently: `\includegraphics{...}`).
+ *   requires it (`\includegraphics`) or mentions a user-defined preamble macro
+ *   MathJax couldn't have learned about.
  * - `renderFromCache` is unaware of which engine populated a cache entry, so
  *   it tries both; cache keys are prefixed by the native engine to make the
  *   dispatch cost O(1) in the miss case.
@@ -23,21 +34,23 @@ import { textRequiresNativeTexEngine } from "./native-tex-detect.js";
  */
 export function createHybridNodeTextEngine(
   mathjax: NodeTextEngine,
-  native: NodeTextEngine | null
+  native: NodeTextEngine | null,
+  options?: HybridNodeTextEngineOptions
 ): NodeTextEngine {
   if (native == null) {
     return mathjax;
   }
+  const userMacroNames = options?.userMacroNames;
 
   return {
     validate(text: string): NodeTextValidationIssue | null {
-      return textRequiresNativeTexEngine(text)
+      return textRequiresNativeTexEngine(text, userMacroNames)
         ? native.validate(text)
         : mathjax.validate(text);
     },
 
     measure(request: NodeTextMeasureRequest): NodeTextMetrics | null {
-      return textRequiresNativeTexEngine(request.text)
+      return textRequiresNativeTexEngine(request.text, userMacroNames)
         ? native.measure(request)
         : mathjax.measure(request);
     },
