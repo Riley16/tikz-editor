@@ -20,6 +20,7 @@ The app is free and open source (MIT licensed, code on GitHub). It works on the 
 - **Export** to SVG, PDF, or PNG
 - **Import** from SVG, IPE, or PPTX
 - **Multi-figure support** for documents with multiple TikZ pictures
+- **Native TeX rendering** (desktop) for `\includegraphics` and user-defined preamble macros — see below
 
 ## Desktop App
 
@@ -28,8 +29,47 @@ Available for macOS, Windows, and Linux with additional features:
 - Native file dialogs and system clipboard integration
 - AI assistant for help with TikZ
 - Automatic updates
+- **Native TeX text engine** — see the next section
 
 Download from [tikz.dev/editor](https://tikz.dev/editor).
+
+## Native TeX rendering (desktop)
+
+The desktop build ships a hybrid text engine: node text that MathJax can
+handle (ordinary text, standard math, common macros) stays on the fast
+MathJax path unchanged, while node text that structurally requires a real
+TeX toolchain is compiled by a local `latex` + `dvisvgm` pipeline and the
+result is embedded in the canvas as SVG. This routes on two criteria:
+
+- The fragment contains `\includegraphics{path}` — the referenced image is
+  compiled, base64-inlined into the SVG, and rendered in place. Draggable
+  like any other node.
+- The fragment mentions a macro defined in the document's preamble
+  (`\newcommand`, `\renewcommand`, `\providecommand`, `\def`, `\gdef`,
+  `\edef`, `\xdef`, `\DeclareMathOperator`). The preamble is threaded into
+  every native compile, so user macros expand correctly.
+
+### Requirements
+
+- A TeX distribution: **MacTeX** (macOS), **TeX Live** (Linux), or **MiKTeX** (Windows).
+- **Ghostscript** — for raster-image embedding under `\includegraphics`.
+  Auto-detected from Homebrew, `/usr/local`, `/opt/homebrew`, `apt`, and the
+  standard Windows install prefixes. Override via the `LIBGS` env var if
+  needed.
+
+Fragments that need native compilation but can't find the toolchain
+silent-skip (same behavior as unknown TikZ constructs elsewhere in the
+editor).
+
+### Try it
+
+Open **[`docs/examples/native-tex-features.tex`](docs/examples/native-tex-features.tex)** in the desktop app. Contains four figures exercising text macros, math macros, `\includegraphics`, and the three combined.
+
+### Scope
+
+This first release covers the *node text* level only — pgfplots and other
+constructs living at the tikzpicture level are not yet routed. See
+[DEVELOPMENT.md](DEVELOPMENT.md) for the architecture and the phased plan.
 
 ## Supported TikZ Features
 

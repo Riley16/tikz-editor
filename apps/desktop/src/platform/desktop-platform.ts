@@ -16,6 +16,7 @@ import type {
   MenuCommandHandler
 } from "@tikz-editor/app/platform/types";
 import type { DocumentFileRef, FileRevision } from "@tikz-editor/app/store/types";
+import type { NativeTexCompileResult } from "tikz-editor/text/native-tex-types";
 import type { CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu } from "@tauri-apps/api/menu";
 import type { Update } from "@tauri-apps/plugin-updater";
 
@@ -1494,6 +1495,21 @@ export function createDesktopPlatformAdapter(env: DesktopPlatformEnvironment = {
       readLastCompileLog: async () => {
         const { invoke } = await import("@tauri-apps/api/core");
         return await invoke<string>("desktop_read_last_compile_log");
+      },
+      compileTexFragment: async ({ source, workingDirectory }) => {
+        const { invoke } = await import("@tauri-apps/api/core");
+        try {
+          return await invoke<NativeTexCompileResult>("desktop_compile_tex_fragment", {
+            source,
+            workingDirectory
+          });
+        } catch (error) {
+          return {
+            ok: false,
+            kind: "runtime-error",
+            message: error instanceof Error ? error.message : String(error)
+          };
+        }
       }
     },
     assistant: {

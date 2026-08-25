@@ -15,6 +15,17 @@ export { renderTikzToSvg, renderTikzToSvgAsync } from "./render/index.js";
 export { capabilityMatrix, FEATURE_IDS } from "./capabilities/index.js";
 export { createMathJaxNodeTextEngine, setWorkerFontLoader } from "./text/mathjax-engine.js";
 export type { MathJaxFont } from "./text/mathjax-engine.js";
+export { createNativeTexNodeTextEngine } from "./text/native-tex-engine.js";
+export { createHybridNodeTextEngine } from "./text/hybrid-engine.js";
+export {
+  textRequiresNativeTexEngine,
+  collectIncludeGraphicsPaths
+} from "./text/native-tex-detect.js";
+export {
+  extractUserPreamble,
+  collectPreambleMacros
+} from "./text/preamble-extract.js";
+export type * from "./text/native-tex-types.js";
 export { collectSymbols, resolveDocHoverTarget } from "./completion/index.js";
 export {
   createPdfExportArtifact,

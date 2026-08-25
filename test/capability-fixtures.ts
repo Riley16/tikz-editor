@@ -305,5 +305,8 @@ export const capabilityFixtures: Record<string, string> = {
   \node (a) at (0,0) {};
   \node (b) at (1,1) {};
   \node[draw,fit=(a) (b)] {};
+\end{tikzpicture}`,
+  include_graphics_node: String.raw`\begin{tikzpicture}
+  \node at (0,0) {\includegraphics[width=1cm]{plot.png}};
 \end{tikzpicture}`
 };
