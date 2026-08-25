@@ -31,7 +31,18 @@ Available for macOS, Windows, and Linux with additional features:
 - Automatic updates
 - **Native TeX text engine** — see the next section
 
-Download from [tikz.dev/editor](https://tikz.dev/editor).
+### Getting the desktop app
+
+This fork adds features (native TeX rendering, agent screenshot capture) that
+are **not yet packaged as pre-built downloads**. To run the fork's version:
+
+- **Build and run from source** — see [Run from source (desktop app)](#run-from-source-desktop-app) below. First build takes 3–5 min; subsequent runs are seconds.
+- **Or use the upstream release** (without this fork's new features) — download from [tikz.dev/editor](https://tikz.dev/editor). Pre-built installers for macOS, Windows, and Linux, with auto-update.
+
+If you want the same one-click installation experience for this fork's version, run
+`npm run build:desktop` after the initial `npm install`. Output goes to
+`apps/desktop/src-tauri/target/release/bundle/` — `.dmg` on macOS, `.msi` /
+`.exe` on Windows, `.AppImage` / `.deb` on Linux. Drag/install as normal.
 
 ## Native TeX rendering (desktop)
 
