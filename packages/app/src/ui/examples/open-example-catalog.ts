@@ -360,5 +360,39 @@ export const OPEN_EXAMPLE_CATALOG: readonly TikzOpenExample[] = [
         (ac) edge (abc)
         (bc) edge (abc);
 \end{tikzpicture}`
+  },
+  {
+    id: "native-tex-macros",
+    title: "Native TeX macros (desktop)",
+    description:
+      "User-defined preamble macros expanded by the native latex + dvisvgm pipeline. Desktop only; requires a TeX distribution.",
+    featureLabels: ["macros", "native-tex", "desktop-only"],
+    source: String.raw`% User-defined macros in the preamble are threaded into each native
+% compile, so node text can reference them just like in a full LaTeX
+% document. MathJax silent-fails on these; the native TeX engine routes
+% them for you. Desktop app only — the web build has no local TeX.
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{xcolor}
+
+\newcommand{\bfheading}[1]{\textbf{\large #1}}
+\newcommand{\emphred}[1]{\textbf{\color{red}#1}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\myVec}[1]{\boldsymbol{#1}}
+\newcommand{\inner}[2]{\langle #1, #2 \rangle}
+\DeclareMathOperator{\argmax}{arg\,max}
+\DeclareMathOperator{\Var}{Var}
+
+\begin{tikzpicture}
+  \node at (0, 0.8)  {\bfheading{Native TeX macros}};
+  \node at (0, 0)    {\emphred{Red bold via a custom macro}};
+  \node at (0, -0.8) {plain text stays on the fast MathJax path};
+\end{tikzpicture}
+
+\begin{tikzpicture}
+  \node at (0, 1.5)  {$\myVec{x} \in \R^n$};
+  \node at (0, 0.5)  {$\hat{y} = \argmax_i \; \inner{\myVec{p}_i}{\myVec{x}}$};
+  \node at (0, -0.5) {$\Var(\myVec{X}) = \mathbb{E}[\myVec{X}\myVec{X}^\top]$};
+\end{tikzpicture}`
   }
 ];
