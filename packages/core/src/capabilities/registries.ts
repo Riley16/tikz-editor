@@ -267,7 +267,8 @@ export const svgFeatureRegistry = [
   "svg_path",
   "svg_circle",
   "svg_text",
-  "render_pipeline"
+  "render_pipeline",
+  "include_graphics"
 ] as const satisfies readonly FeatureId[];
 
 export const editFeatureRegistry = [

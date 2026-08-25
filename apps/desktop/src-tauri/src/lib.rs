@@ -1482,18 +1482,27 @@ async fn run_shell_command(
     args: &[&str],
     working_dir: &Path,
 ) -> Result<CommandRunOutput, String> {
-    let (mut receiver, child) = app
-        .shell()
-        .command(command)
-        .args(args.to_vec())
-        .current_dir(working_dir)
-        .spawn()
-        .map_err(|e| {
-            format!(
-                "Failed to spawn `{command}` in {}: {e}",
-                working_dir.to_string_lossy()
-            )
-        })?;
+    run_shell_command_with_env(app, command, args, working_dir, &[]).await
+}
+
+async fn run_shell_command_with_env(
+    app: &AppHandle,
+    command: &str,
+    args: &[&str],
+    working_dir: &Path,
+    env_pairs: &[(String, String)],
+) -> Result<CommandRunOutput, String> {
+    let mut cmd = app.shell().command(command);
+    cmd = cmd.args(args.to_vec()).current_dir(working_dir);
+    for (k, v) in env_pairs {
+        cmd = cmd.env(k, v);
+    }
+    let (mut receiver, child) = cmd.spawn().map_err(|e| {
+        format!(
+            "Failed to spawn `{command}` in {}: {e}",
+            working_dir.to_string_lossy()
+        )
+    })?;
 
     let mut stdout = Vec::<u8>::new();
     let mut stderr = Vec::<u8>::new();
@@ -1657,6 +1666,428 @@ async fn desktop_compile_tikz(latex_document: String, app: AppHandle) -> Result<
     publish_last_latex_compile_log(&working_dir);
     let _ = fs::remove_dir_all(&working_dir);
     Ok(svg)
+}
+
+/// Ghostscript's shared library must be reachable for dvisvgm to embed raster
+/// images (`\includegraphics`) in the emitted SVG. dvisvgm honours the `LIBGS`
+/// env var; we try common install prefixes for macOS/Linux/Windows so the
+/// user does not have to set `LIBGS` manually.
+fn find_libgs_path() -> Option<PathBuf> {
+    if let Some(env_path) = env::var_os("LIBGS") {
+        let p = PathBuf::from(env_path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let fixed_candidates = [
+            "/usr/local/lib/libgs.dylib",
+            "/usr/local/opt/ghostscript/lib/libgs.dylib",
+            "/opt/homebrew/lib/libgs.dylib",
+            "/opt/homebrew/opt/ghostscript/lib/libgs.dylib",
+        ];
+        for candidate in fixed_candidates.iter() {
+            let p = PathBuf::from(candidate);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+        for cellar in [
+            "/usr/local/Cellar/ghostscript",
+            "/opt/homebrew/Cellar/ghostscript",
+        ]
+        .iter()
+        {
+            if let Ok(entries) = fs::read_dir(cellar) {
+                for entry in entries.flatten() {
+                    let candidate = entry.path().join("lib").join("libgs.dylib");
+                    if candidate.exists() {
+                        return Some(candidate);
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let fixed_candidates = [
+            "/usr/lib/x86_64-linux-gnu/libgs.so",
+            "/usr/lib/aarch64-linux-gnu/libgs.so",
+            "/usr/lib/libgs.so",
+            "/usr/local/lib/libgs.so",
+        ];
+        for candidate in fixed_candidates.iter() {
+            let p = PathBuf::from(candidate);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        for base in ["C:/Program Files/gs", "C:/Program Files (x86)/gs"].iter() {
+            if let Ok(entries) = fs::read_dir(base) {
+                for entry in entries.flatten() {
+                    for dll in ["gsdll64.dll", "gsdll32.dll"].iter() {
+                        let candidate = entry.path().join("bin").join(dll);
+                        if candidate.exists() {
+                            return Some(candidate);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn guess_image_mime(reference: &str) -> &'static str {
+    let lower = reference.to_ascii_lowercase();
+    if lower.ends_with(".png") {
+        "image/png"
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if lower.ends_with(".gif") {
+        "image/gif"
+    } else if lower.ends_with(".webp") {
+        "image/webp"
+    } else if lower.ends_with(".svg") {
+        "image/svg+xml"
+    } else if lower.ends_with(".pdf") {
+        "application/pdf"
+    } else {
+        "application/octet-stream"
+    }
+}
+
+fn is_local_image_ref(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with("data:")
+        && !value.starts_with("http:")
+        && !value.starts_with("https:")
+        && !value.starts_with("file:")
+        && !value.starts_with('#')
+}
+
+/// dvisvgm emits `<image ... xlink:href='plot.png'/>` (or `href="plot.png"`)
+/// referencing files that no longer exist by the time the SVG is rendered
+/// inside the tikz-editor canvas. Rewrite every local file reference to a
+/// self-contained `data:` URI so the SVG is portable.
+fn inline_svg_image_refs(svg: &str, cwd: &Path) -> String {
+    let mut out = String::with_capacity(svg.len());
+    let mut remaining = svg;
+    loop {
+        let (attr_offset, attr_kind) = match (remaining.find("xlink:href="), remaining.find(" href=")) {
+            (Some(a), Some(b)) if a <= b => (a, "xlink:href="),
+            (Some(a), Some(_b)) => (a, "xlink:href="),
+            (Some(a), None) => (a, "xlink:href="),
+            (None, Some(b)) => (b + 1, "href="),
+            (None, None) => {
+                out.push_str(remaining);
+                return out;
+            }
+        };
+        out.push_str(&remaining[..attr_offset + attr_kind.len()]);
+        remaining = &remaining[attr_offset + attr_kind.len()..];
+        let Some(quote_char) = remaining.chars().next() else {
+            return out;
+        };
+        if quote_char != '\'' && quote_char != '"' {
+            continue;
+        }
+        let quote_len = quote_char.len_utf8();
+        let value_start = quote_len;
+        let Some(value_end_rel) = remaining[value_start..].find(quote_char) else {
+            out.push_str(remaining);
+            return out;
+        };
+        let value_end = value_start + value_end_rel;
+        let value = &remaining[value_start..value_end];
+
+        let replacement_value = if is_local_image_ref(value) {
+            let candidate = cwd.join(value);
+            fs::read(&candidate)
+                .ok()
+                .map(|bytes| {
+                    let mime = guess_image_mime(value);
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    format!("data:{mime};base64,{b64}")
+                })
+        } else {
+            None
+        };
+        let final_value = replacement_value.as_deref().unwrap_or(value);
+
+        out.push(quote_char);
+        out.push_str(final_value);
+        out.push(quote_char);
+        remaining = &remaining[value_end + quote_len..];
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompileFragmentSuccess {
+    ok: bool,
+    svg: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompileFragmentFailure {
+    ok: bool,
+    kind: String,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    log_tail: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum CompileFragmentResult {
+    Success(CompileFragmentSuccess),
+    Failure(CompileFragmentFailure),
+}
+
+fn tail_of_file(path: &Path, max_lines: usize) -> String {
+    let contents = read_text_if_exists(path);
+    if contents.is_empty() {
+        return String::new();
+    }
+    let lines: Vec<&str> = contents.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
+}
+
+/// Compile a self-contained `.tex` fragment and return an SVG snippet suitable
+/// for embedding inside the canvas. Called by the frontend's native-TeX text
+/// engine when a node contains constructs MathJax cannot render (currently:
+/// `\includegraphics`).
+///
+/// - `source` MUST already be a full standalone document; wrapping is the
+///   caller's responsibility so the wrapping logic stays testable in the core
+///   TS package.
+/// - `working_directory`, when provided, is prepended to TEXINPUTS so LaTeX
+///   can resolve relative `\includegraphics{path}` references, and is used as
+///   the search root when post-processing the SVG to inline referenced image
+///   files as base64 data URIs.
+#[tauri::command]
+async fn desktop_compile_tex_fragment(
+    source: String,
+    working_directory: Option<String>,
+    app: AppHandle,
+) -> CompileFragmentResult {
+    let latex_available = find_executable("latex", Some(&app)).is_some();
+    let dvisvgm_available = find_executable("dvisvgm", Some(&app)).is_some();
+    if !latex_available || !dvisvgm_available {
+        let mut missing = Vec::new();
+        if !latex_available {
+            missing.push("latex");
+        }
+        if !dvisvgm_available {
+            missing.push("dvisvgm");
+        }
+        return CompileFragmentResult::Failure(CompileFragmentFailure {
+            ok: false,
+            kind: "toolchain-missing".into(),
+            message: format!(
+                "TeX toolchain not detected: missing {}. Install a TeX distribution (MacTeX / TeX Live / MiKTeX) to enable native rendering of \\includegraphics and other constructs.",
+                missing.join(" and ")
+            ),
+            log_tail: None,
+        });
+    }
+
+    let work_dir = match create_latex_compile_working_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            return CompileFragmentResult::Failure(CompileFragmentFailure {
+                ok: false,
+                kind: "runtime-error".into(),
+                message: format!("Failed to allocate compile working dir: {e}"),
+                log_tail: None,
+            });
+        }
+    };
+
+    let tex_path = work_dir.join("input.tex");
+    if let Err(e) = fs::write(&tex_path, &source) {
+        let _ = fs::remove_dir_all(&work_dir);
+        return CompileFragmentResult::Failure(CompileFragmentFailure {
+            ok: false,
+            kind: "runtime-error".into(),
+            message: format!(
+                "Failed to write .tex in {}: {e}",
+                work_dir.to_string_lossy()
+            ),
+            log_tail: None,
+        });
+    }
+
+    let mut env_pairs: Vec<(String, String)> = Vec::new();
+    if let Some(cwd) = working_directory.as_ref() {
+        let existing = env::var("TEXINPUTS").unwrap_or_default();
+        // Trailing separator (colon on Unix, semicolon on Windows) leaves the
+        // default TeX search path in effect after our injected entry.
+        #[cfg(target_family = "windows")]
+        let sep = ';';
+        #[cfg(not(target_family = "windows"))]
+        let sep = ':';
+        env_pairs.push(("TEXINPUTS".into(), format!("{cwd}{sep}{existing}")));
+    }
+    if let Some(gs_path) = find_libgs_path() {
+        env_pairs.push(("LIBGS".into(), gs_path.to_string_lossy().into_owned()));
+    }
+
+    let latex_run = run_shell_command_with_env(
+        &app,
+        "latex",
+        &[
+            "-interaction=batchmode",
+            "-file-line-error",
+            "-halt-on-error",
+            "input.tex",
+        ],
+        &work_dir,
+        &env_pairs,
+    )
+    .await;
+    let latex_result = match latex_run {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&work_dir);
+            return CompileFragmentResult::Failure(CompileFragmentFailure {
+                ok: false,
+                kind: "runtime-error".into(),
+                message: e,
+                log_tail: None,
+            });
+        }
+    };
+
+    if latex_result.status_code != Some(0) {
+        let latex_log_path = work_dir.join("input.log");
+        let log_tail = tail_of_file(&latex_log_path, 40);
+        let message = format_command_failure(
+            "latex",
+            latex_result.status_code,
+            &latex_result.stdout,
+            &latex_result.stderr,
+            Some(&latex_log_path),
+            &work_dir,
+        );
+        publish_last_latex_compile_log(&work_dir);
+        let _ = fs::remove_dir_all(&work_dir);
+        return CompileFragmentResult::Failure(CompileFragmentFailure {
+            ok: false,
+            kind: "compile-failed".into(),
+            message,
+            log_tail: if log_tail.is_empty() {
+                None
+            } else {
+                Some(log_tail)
+            },
+        });
+    }
+
+    let dvi_path = work_dir.join("input.dvi");
+    if !dvi_path.exists() {
+        let _ = fs::remove_dir_all(&work_dir);
+        return CompileFragmentResult::Failure(CompileFragmentFailure {
+            ok: false,
+            kind: "runtime-error".into(),
+            message: "latex succeeded but no .dvi was produced.".into(),
+            log_tail: None,
+        });
+    }
+
+    let dvisvgm_run = run_shell_command_with_env(
+        &app,
+        "dvisvgm",
+        &[
+            "--page=1",
+            "--bbox=min",
+            "--exact",
+            "--font-format=woff2",
+            "-o",
+            "output.svg",
+            "input.dvi",
+        ],
+        &work_dir,
+        &env_pairs,
+    )
+    .await;
+    let dvisvgm_result = match dvisvgm_run {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&work_dir);
+            return CompileFragmentResult::Failure(CompileFragmentFailure {
+                ok: false,
+                kind: "runtime-error".into(),
+                message: e,
+                log_tail: None,
+            });
+        }
+    };
+
+    if dvisvgm_result.status_code != Some(0) {
+        let message = format_command_failure(
+            "dvisvgm",
+            dvisvgm_result.status_code,
+            &dvisvgm_result.stdout,
+            &dvisvgm_result.stderr,
+            None,
+            &work_dir,
+        );
+        let _ = fs::remove_dir_all(&work_dir);
+        return CompileFragmentResult::Failure(CompileFragmentFailure {
+            ok: false,
+            kind: "compile-failed".into(),
+            message,
+            log_tail: None,
+        });
+    }
+
+    let svg_path = work_dir.join("output.svg");
+    if !svg_path.exists() {
+        let _ = fs::remove_dir_all(&work_dir);
+        return CompileFragmentResult::Failure(CompileFragmentFailure {
+            ok: false,
+            kind: "runtime-error".into(),
+            message: "dvisvgm succeeded but no .svg was produced.".into(),
+            log_tail: None,
+        });
+    }
+
+    let raw_svg = match fs::read_to_string(&svg_path) {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&work_dir);
+            return CompileFragmentResult::Failure(CompileFragmentFailure {
+                ok: false,
+                kind: "runtime-error".into(),
+                message: format!("Failed to read SVG: {e}"),
+                log_tail: None,
+            });
+        }
+    };
+
+    // dvisvgm can only resolve relative image paths against the compile cwd
+    // (the tempdir). When compiling on behalf of a saved `.tex` we want to
+    // resolve them against the user's document directory so the resulting
+    // SVG picks up the actual PNG/JPG data even if the file wasn't copied.
+    let image_search_dir = working_directory
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| work_dir.clone());
+    let inlined_svg = inline_svg_image_refs(&raw_svg, &image_search_dir);
+
+    let _ = fs::remove_dir_all(&work_dir);
+    CompileFragmentResult::Success(CompileFragmentSuccess {
+        ok: true,
+        svg: inlined_svg,
+    })
 }
 
 #[tauri::command]
@@ -2449,6 +2880,7 @@ pub fn run() {
             desktop_install_codex,
             desktop_check_latex_available,
             desktop_compile_tikz,
+            desktop_compile_tex_fragment,
             desktop_read_last_compile_log,
             desktop_open_text,
             desktop_open_binary,

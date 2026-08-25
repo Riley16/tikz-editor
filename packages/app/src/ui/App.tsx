@@ -8,7 +8,7 @@ import {
 } from "../app-menu";
 import { useEditorStore } from "../store/store";
 import { useWorkspaceListStore } from "../store/workspace-list-store";
-import { computeSnapshot, makeEmptySnapshot, setMathJaxFont, type ComputeRequest, type ComputeResponse } from "../compute";
+import { computeSnapshot, makeEmptySnapshot, setMathJaxFont, setNativeTexCompiler, type ComputeRequest, type ComputeResponse } from "../compute";
 import { applyEditAction } from "tikz-editor/edit/actions";
 import { getRepeatSelectionEligibility } from "tikz-editor/edit/actions/repeat";
 import { collectSourceWorldBounds } from "tikz-editor/edit/snapping";
@@ -718,6 +718,22 @@ export function App() {
     }
     delete document.documentElement.dataset.desktopOs;
   }, [platform.id]);
+
+  const activeFileRefPath = useEditorStore(
+    (s) => s.documents[s.activeDocumentId]?.fileRef?.path ?? null
+  );
+  useEffect(() => {
+    const compile = platform.latex?.compileTexFragment ?? null;
+    let workingDirectory: string | null = null;
+    if (activeFileRefPath) {
+      const slash = Math.max(
+        activeFileRefPath.lastIndexOf("/"),
+        activeFileRefPath.lastIndexOf("\\")
+      );
+      workingDirectory = slash > 0 ? activeFileRefPath.slice(0, slash) : null;
+    }
+    setNativeTexCompiler(compile, workingDirectory);
+  }, [platform.latex, activeFileRefPath]);
 
   useEffect(() => {
     sourceRef.current = source;

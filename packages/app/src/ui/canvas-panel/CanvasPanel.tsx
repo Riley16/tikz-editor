@@ -43,7 +43,9 @@ import {
 getKnuthPlassCaretFromPoint,
 getKnuthPlassLineRangeFromPoint
 } from "tikz-editor/text/knuth-plass";
+import { createHybridNodeTextEngine } from "tikz-editor/text/hybrid-engine";
 import { createMathJaxNodeTextEngine,getActiveMathJaxOutputJax } from "tikz-editor/text/mathjax-engine";
+import { createNativeTexNodeTextEngine } from "tikz-editor/text/native-tex-engine";
 import type { NodeTextEngine,NodeTextLayoutKind } from "tikz-editor/text/types";
 import { useShallow } from "zustand/react/shallow";
 import type { AppMenuCommandId } from "../../app-menu";
@@ -1418,25 +1420,46 @@ export const CanvasPanel = memo(function CanvasPanel({
     [snapDebugRect.height, snapDebugRect.width]
   );
 
+  const activeFileRefPath = useEditorStore(
+    (s) => s.documents[s.activeDocumentId]?.fileRef?.path ?? null
+  );
+  const nativeTexWorkingDirectory = useMemo(() => {
+    if (!activeFileRefPath) {
+      return null;
+    }
+    const slash = Math.max(
+      activeFileRefPath.lastIndexOf("/"),
+      activeFileRefPath.lastIndexOf("\\")
+    );
+    return slash > 0 ? activeFileRefPath.slice(0, slash) : null;
+  }, [activeFileRefPath]);
+  const nativeTexCompileFn = platform.latex?.compileTexFragment ?? null;
+
   useEffect(() => {
     let cancelled = false;
-    void createMathJaxNodeTextEngine({ font: mathJaxFont })
-      .then((engine) => {
-        if (!cancelled) {
-          textEngineRef.current = engine;
-          setActiveTextEngine(engine);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          textEngineRef.current = null;
-          setActiveTextEngine(null);
-        }
-      });
+    void (async () => {
+      try {
+        const mathjax = await createMathJaxNodeTextEngine({ font: mathJaxFont });
+        if (cancelled) return;
+        const native = nativeTexCompileFn
+          ? createNativeTexNodeTextEngine({
+              compile: nativeTexCompileFn,
+              workingDirectory: nativeTexWorkingDirectory
+            })
+          : null;
+        const engine = createHybridNodeTextEngine(mathjax, native);
+        textEngineRef.current = engine;
+        setActiveTextEngine(engine);
+      } catch {
+        if (cancelled) return;
+        textEngineRef.current = null;
+        setActiveTextEngine(null);
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [mathJaxFont]);
+  }, [mathJaxFont, nativeTexCompileFn, nativeTexWorkingDirectory]);
 
   useEffect(() => {
     function onPointerMove(event: PointerEvent) {

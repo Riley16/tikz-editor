@@ -89,7 +89,8 @@ export const FEATURE_IDS = [
   "svg_path",
   "svg_circle",
   "svg_text",
-  "render_pipeline"
+  "render_pipeline",
+  "include_graphics"
 ] as const;
 
 export type FeatureId = (typeof FEATURE_IDS)[number];

@@ -1,6 +1,7 @@
 import type { LinkedTextReadResult, LinkedTextWriteResult } from "../linked-file-sync.js";
 import type { DocumentFileRef, FileRevision } from "../store/types.js";
 import type { AppMenuCommandId, AppMenuDefinition, AppMenuItem } from "../app-menu/index.js";
+import type { NativeTexCompileResult } from "tikz-editor/text/native-tex-types";
 
 export type MenuCommandOrigin = "menu" | "shortcut" | "context-menu" | "platform";
 
@@ -324,4 +325,16 @@ export type PlatformLatex = {
   checkAvailable: () => Promise<{ available: boolean; details: string }>;
   compileTikzToSvg: (latexDocument: string) => Promise<string>;
   readLastCompileLog?: () => Promise<string>;
+  /**
+   * Compile a self-contained `.tex` fragment (standalone document) and return
+   * an SVG snippet with any referenced image assets inlined as base64. Present
+   * only on platforms with a local TeX toolchain (desktop). Wiring: powers the
+   * hybrid text engine's `\includegraphics` support — MathJax handles ordinary
+   * text/math and only fragments that structurally require full TeX get
+   * routed here.
+   */
+  compileTexFragment?: (args: {
+    source: string;
+    workingDirectory: string | null;
+  }) => Promise<NativeTexCompileResult>;
 };
